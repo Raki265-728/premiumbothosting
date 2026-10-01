@@ -117,4 +117,227 @@ def log_activity(user_id, action, detail=""):
 def make_ref_code(uid):
     return hashlib.md5(f"ref{uid}{secrets.token_hex(4)}".encode()).hexdigest()[:8]
 
-logger.info("Part 1 loaded successfully")
+# ═══════════════════════════════════════════════
+#  BOT MANAGEMENT
+# ═══════════════════════════════════════════════
+
+procs = {}
+plock = threading.Lock()
+
+PIP_MAP = {
+    "telebot": "pyTelegramBotAPI",
+    "telegram": "python-telegram-bot",
+    "PIL": "Pillow",
+    "cv2": "opencv-python",
+    "Crypto": "pycryptodome",
+    "bs4": "beautifulsoup4",
+    "dotenv": "python-dotenv",
+    "yaml": "PyYAML",
+    "aiogram": "aiogram",
+    "telethon": "Telethon",
+    "discord": "discord.py",
+    "requests": "requests",
+    "aiohttp": "aiohttp",
+    "httpx": "httpx",
+    "flask": "Flask",
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+    "pandas": "pandas",
+    "numpy": "numpy",
+    "openai": "openai",
+    "gtts": "gTTS",
+    "pydub": "pydub",
+    "psutil": "psutil",
+    "pymongo": "pymongo",
+    "sqlalchemy": "SQLAlchemy",
+    "redis": "redis",
+    "pyrogram": "pyrogram",
+    "tgcrypto": "TgCrypto",
+    "moviepy": "moviepy",
+    "pytz": "pytz",
+    "emoji": "emoji",
+    "urllib3": "urllib3",
+    "certifi": "certifi",
+}
+
+def get_file_type(fn):
+    if not fn: return "unknown"
+    n = fn.lower()
+    if n.endswith(".py"): return "python"
+    if n.endswith(".js"): return "javascript"
+    if n.endswith(".zip"): return "zip"
+    if any(n.endswith(e) for e in [".tar", ".tar.gz", ".tgz"]): return "archive"
+    return "unknown"
+
+def extract_archive(path, out):
+    try:
+        if path.lower().endswith(".zip"):
+            with zipfile.ZipFile(path) as z: z.extractall(out)
+        elif path.lower().endswith((".tar.gz", ".tgz")):
+            with tarfile.open(path, "r:gz") as t: t.extractall(out)
+        elif path.lower().endswith(".tar"):
+            with tarfile.open(path, "r") as t: t.extractall(out)
+        else: return False, "Unsupported archive"
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+def find_main_file(d):
+    priority = ["main.py", "bot.py", "app.py", "server.py", "index.py",
+                "main.js", "bot.js", "app.js", "index.js"]
+    for f in priority:
+        p = os.path.join(d, f)
+        if os.path.isfile(p): return p
+    for root, _, files in os.walk(d):
+        for f in priority:
+            if f in files: return os.path.join(root, f)
+    for root, _, files in os.walk(d):
+        for f in files:
+            if f.endswith((".py", ".js")): return os.path.join(root, f)
+    return None
+
+def uninstall_fake_telegram():
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "-y", "telegram"],
+            capture_output=True, timeout=30
+        )
+    except Exception:
+        pass
+
+def install_requirements_file(path):
+    if not os.path.exists(path): return
+    try:
+        with open(path) as f:
+            pkgs = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+        for pkg in pkgs:
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", pkg, "--quiet"],
+                    capture_output=True, timeout=300
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def extract_imports(fp):
+    imps = set()
+    try:
+        with open(fp, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names: imps.add(a.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                imps.add(node.module.split(".")[0])
+    except Exception:
+        pass
+    return imps
+
+def install_missing_imports(imports):
+    uninstall_fake_telegram()
+    missing = []
+    for m in imports:
+        try:
+            importlib.import_module(m)
+        except ImportError:
+            missing.append(m)
+    if not missing:
+        return True, "All available"
+    ok = fail = 0
+    for m in missing:
+        pip_name = PIP_MAP.get(m, m)
+        try:
+            r = subprocess.run(
+                [sys.executable, "-m", "pip", "install", pip_name, "--quiet"],
+                capture_output=True, text=True, timeout=300
+            )
+            if r.returncode == 0: ok += 1
+            else: fail += 1
+        except Exception:
+            fail += 1
+    return fail == 0, f"Installed {ok}, failed {fail}"
+
+def start_bot_process(bot_id, code_path, log_path, env_extra=None):
+    with plock:
+        if bot_id in procs and procs[bot_id].poll() is None:
+            return False, "Already running"
+
+    ext = os.path.splitext(code_path)[1].lower()
+    workdir = os.path.dirname(code_path)
+
+    if ext == ".py":
+        uninstall_fake_telegram()
+        req = os.path.join(workdir, "requirements.txt")
+        install_requirements_file(req)
+        imps = extract_imports(code_path)
+        if imps:
+            install_missing_imports(imps)
+
+    if ext == ".py":   cmd = [sys.executable, "-u", code_path]
+    elif ext == ".js": cmd = ["node", code_path]
+    else: return False, f"Unsupported: {ext}"
+
+    env = os.environ.copy()
+    if env_extra:
+        env.update({k: str(v) for k, v in env_extra.items()})
+
+    log_f = open(log_path, "a")
+    log_f.write(f"\n{'='*50}\n▶ START {datetime.utcnow().isoformat()}\n{'='*50}\n")
+    log_f.flush()
+
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=log_f, stderr=subprocess.STDOUT,
+            cwd=workdir, env=env, text=True
+        )
+    except Exception as e:
+        log_f.close()
+        return False, f"Failed: {e}"
+
+    with plock:
+        procs[bot_id] = proc
+
+    def watch():
+        try:
+            code = proc.wait()
+        finally:
+            with plock:
+                procs.pop(bot_id, None)
+            try:
+                with dblock:
+                    c = conn.cursor()
+                    c.execute("UPDATE bots SET status='stopped', pid=NULL WHERE id=?", (bot_id,))
+                    conn.commit()
+            except Exception:
+                pass
+            log_f.write(f"\n■ EXIT code={code} {datetime.utcnow().isoformat()}\n")
+            log_f.close()
+
+    threading.Thread(target=watch, daemon=True).start()
+    return True, "Started"
+
+def stop_bot_process(bot_id):
+    with plock:
+        proc = procs.pop(bot_id, None)
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+def is_running(bot_id):
+    with plock:
+        p = procs.get(bot_id)
+    return p is not None and p.poll() is None
+
+def read_logs(log_path, lines=300):
+    try:
+        with open(log_path) as f:
+            return "".join(f.readlines()[-lines:])
+    except FileNotFoundError:
+        return "(no logs yet)"
+
+logger.info("Part 1+2 loaded successfully")
