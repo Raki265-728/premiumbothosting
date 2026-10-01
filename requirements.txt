@@ -1,0 +1,8 @@
+Flask
+Werkzeug
+psutil
+python-telegram-bot
+pyTelegramBotAPI
+aiohttp
+httpx
+requests
